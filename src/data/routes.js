@@ -1,10 +1,11 @@
-export const routes = [
+export const fallbackRoutes = [
   {
     id: 'R9',
     name: 'Karachi Route',
     busId: 'BUS001',
     departure: '07:30 AM',
     departureMinutes: 450,
+    roadMultiplier: 1.35,
     start: 'Saddar',
     destination: 'North Karachi',
     stops: [
@@ -21,6 +22,7 @@ export const routes = [
     busId: 'BUS007',
     departure: '07:45 AM',
     departureMinutes: 465,
+    roadMultiplier: 1.35,
     start: 'Clifton',
     destination: 'North Karachi',
     stops: [
@@ -36,6 +38,7 @@ export const routes = [
     busId: 'BUS003',
     departure: '08:15 AM',
     departureMinutes: 495,
+    roadMultiplier: 1.35,
     start: 'Gulshan-e-Iqbal',
     destination: 'Clifton',
     stops: [
@@ -45,17 +48,3 @@ export const routes = [
     ],
   },
 ];
-
-export function getRoute(routeId) {
-  return routes.find((route) => route.id === routeId);
-}
-
-export function getRouteByBusId(busId) {
-  return routes.find((route) => route.busId === busId);
-}
-
-export const allStops = routes
-  .flatMap((route) => route.stops.map((stop) => stop.name))
-  .filter((stop, index, all) => all.indexOf(stop) === index);
-
-export const knownBusIds = [...new Set(routes.map((route) => route.busId))];

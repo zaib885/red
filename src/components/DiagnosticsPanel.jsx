@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { firebaseReady, getAuthUid } from '../firebase';
+import { isFirebaseConfigured } from '@/firebase';
+import { getAuthUid } from '@/firebase/auth';
 
 export function DiagnosticsPanel({ lastWriteResult, lastSnapshotTime }) {
   const [open, setOpen] = useState(false);
@@ -13,11 +14,11 @@ export function DiagnosticsPanel({ lastWriteResult, lastSnapshotTime }) {
       </button>
       {open && (
         <dl className="diag-body">
-          <dt>Firebase configured</dt><dd>{firebaseReady ? 'Yes' : 'No'}</dd>
+          <dt>Firebase configured</dt><dd>{isFirebaseConfigured ? 'Yes' : 'No'}</dd>
           <dt>Auth UID</dt><dd>{getAuthUid() ?? '—'}</dd>
           <dt>isSecureContext</dt><dd>{String(window.isSecureContext)}</dd>
           <dt>Last write</dt><dd>{lastWriteResult ?? '—'}</dd>
-          <dt>Last snapshot</dt><dd>{lastSnapshotTime ? new Date(lastSnapshotTime).toLocaleTimeString() : '—'}</dd>
+          <dt>Last sent</dt><dd>{lastSnapshotTime ? new Date(lastSnapshotTime).toLocaleTimeString() : '—'}</dd>
         </dl>
       )}
     </div>

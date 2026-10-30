@@ -21,13 +21,13 @@ export function formatTimestamp(ts) {
   return `${day} ${month}`;
 }
 
-export function secondsAgo(ts) {
+export function secondsAgo(ts, now) {
   if (typeof ts !== 'number') return null;
-  return Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  return Math.max(0, Math.floor((now - ts) / 1000));
 }
 
-export function formatSecondsAgo(ts) {
-  const secs = secondsAgo(ts);
+export function formatSecondsAgo(ts, now) {
+  const secs = secondsAgo(ts, now);
   if (secs == null) return '—';
   if (secs < 60) return `${secs}s ago`;
   const mins = Math.floor(secs / 60);
@@ -36,7 +36,7 @@ export function formatSecondsAgo(ts) {
   return `${hours}h ago`;
 }
 
-export function minutesNow() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+export function minutesOfDay(ts) {
+  const date = new Date(ts);
+  return date.getHours() * 60 + date.getMinutes();
 }

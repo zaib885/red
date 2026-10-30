@@ -2,11 +2,15 @@ import { useState } from 'react';
 import { Logo } from './Logo';
 import { BottomNav } from './BottomNav';
 import { SideMenu } from './SideMenu';
+import { ErrorBanner } from './ErrorBanner';
+import { useAuthError } from '@/hooks/useAuthError';
+import { dismissAuthError } from '@/firebase/auth';
 import { Menu, UserRound } from 'lucide-react';
 
 export function Shell({ children, title, subtitle }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const authError = useAuthError();
 
   return (
     <div className="app-shell">
@@ -29,6 +33,7 @@ export function Shell({ children, title, subtitle }) {
           </button>
         </div>
       </header>
+      <ErrorBanner type="auth" error={authError} onDismiss={dismissAuthError} />
       {children}
       <BottomNav />
       <SideMenu open={menuOpen} onClose={() => setMenuOpen(false)} />

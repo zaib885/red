@@ -1,5 +1,5 @@
 import { Info, AlertTriangle } from 'lucide-react';
-import { describeFirebaseError } from '../firebase';
+import { describeFirebaseError } from '@/firebase';
 
 export function ErrorBanner({ type, error, onDismiss }) {
   if (type === 'auth' && error) {
@@ -7,7 +7,15 @@ export function ErrorBanner({ type, error, onDismiss }) {
       <div className="error-banner auth">
         <AlertTriangle size={16} />
         <span>Authentication error: {describeFirebaseError(error)}</span>
-        {onDismiss && <button className="banner-close" onClick={onDismiss}>✕</button>}
+        {onDismiss && <button className="banner-close" onClick={onDismiss} aria-label="Dismiss">✕</button>}
+      </div>
+    );
+  }
+  if (type === 'listener' && error) {
+    return (
+      <div className="error-banner auth">
+        <AlertTriangle size={16} />
+        <span>Could not load live data: {describeFirebaseError(error)}</span>
       </div>
     );
   }

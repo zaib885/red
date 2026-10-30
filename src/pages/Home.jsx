@@ -1,65 +1,77 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Navigation, ArrowLeftRight } from 'lucide-react';
 import { Shell } from '../components/Shell';
 import { RouteCard } from '../components/RouteCard';
 import { ErrorBanner } from '../components/ErrorBanner';
-import { routes as localRoutes, allStops } from '../data/routes';
-import { useAllBuses } from '../hooks/useAllBuses';
-import { useDemoSimulation } from '../hooks/useDemoSimulation';
-import { shouldStartInDemoMode, isFirebaseConfigured, settings } from '../config';
+import { useRoutesContext } from '@/context/RoutesContext';
+import { useDemoMode } from '@/context/DemoModeContext';
+import { useSimulation } from '@/context/SimulationContext';
+import { useAllBuses } from '@/hooks/useAllBuses';
+import { isFirebaseConfigured } from '@/firebase';
+import { BOARDING_STORAGE_KEY, DESTINATION_STORAGE_KEY } from '@/data/settings';
+import { allStopNames } from '@/utils/routes';
+import { getRouteStatus, isDemoLiveRoute } from '@/utils/busStatus';
+import { minutesOfDay } from '@/utils/time';
 
-const BOARDING_KEY = 'routvia-boarding-stop';
-const DESTINATION_KEY = 'routvia-destination-stop';
+const FILTERS = ['All Routes', 'Active Buses', 'Scheduled Buses'];
+const LIVE_STATUSES = ['Live', 'Demo-Live'];
+const EMPTY_MESSAGES = {
+  'Active Buses': 'No buses are live on this trip right now.',
+  'Scheduled Buses': 'No scheduled buses left for this trip today.',
+};
 
 export function Home() {
   const navigate = useNavigate();
-  const demoMode = shouldStartInDemoMode();
-  const { buses } = useAllBuses();
-  const { position: demoR9 } = useDemoSimulation(localRoutes[0], demoMode);
-  const { position: demoR4 } = useDemoSimulation(localRoutes[1], demoMode);
-  const [boarding, setBoarding] = useState(() => localStorage.getItem(BOARDING_KEY) || 'Gulshan-e-Iqbal');
-  const [destination, setDestination] = useState(() => localStorage.getItem(DESTINATION_KEY) || 'North Karachi');
+  const { routes, error: routesError } = useRoutesContext();
+  const { demoMode } = useDemoMode();
+  const { positions } = useSimulation();
+  const { buses, error: busesError, now } = useAllBuses();
+  const [boarding, setBoarding] = useState(() => localStorage.getItem(BOARDING_STORAGE_KEY) || 'Gulshan-e-Iqbal');
+  const [destination, setDestination] = useState(() => localStorage.getItem(DESTINATION_STORAGE_KEY) || 'North Karachi');
   const [filter, setFilter] = useState('All Routes');
+  const stopNames = useMemo(() => allStopNames(routes), [routes]);
 
   useEffect(() => {
-    localStorage.setItem(BOARDING_KEY, boarding);
+    localStorage.setItem(BOARDING_STORAGE_KEY, boarding);
   }, [boarding]);
+
+  useEffect(() => {
+    localStorage.setItem(DESTINATION_STORAGE_KEY, destination);
+  }, [destination]);
 
   const swap = () => {
     setBoarding(destination);
     setDestination(boarding);
   };
 
-  const tripRoutes = localRoutes.filter((route) => {
-    const stops = route.stops.map((s) => s.name);
-    const boardingIdx = stops.indexOf(boarding);
-    const destIdx = stops.indexOf(destination);
-    return boardingIdx >= 0 && destIdx >= 0 && boardingIdx < destIdx;
+  const nowMinutes = minutesOfDay(now);
+  const allRows = routes.map((route) => {
+    const demoLive = isDemoLiveRoute(route.id, demoMode);
+    const bus = demoLive ? positions[route.id] : buses[route.busId];
+    const status = getRouteStatus({ route, bus, demoLive, now, nowMinutes });
+    return { route, bus, status };
   });
+  const anyLive = allRows.some((row) => LIVE_STATUSES.includes(row.status));
 
-  const demoRouteIds = ['R9', 'R4'];
-  const demoBuses = { BUS001: demoR9, BUS007: demoR4 };
+  const isOnTrip = (route) => {
+    const names = route.stops.map((stop) => stop.name);
+    const boardingIndex = names.indexOf(boarding);
+    const destinationIndex = names.indexOf(destination);
+    return boardingIndex >= 0 && destinationIndex >= 0 && boardingIndex < destinationIndex;
+  };
 
-  let visibleRoutes = tripRoutes;
-  if (filter === 'Active Buses') {
-    visibleRoutes = tripRoutes.filter((r) => {
-      const bus = buses[r.busId] || (demoMode ? demoBuses[r.busId] : null);
-      if (demoMode && demoRouteIds.includes(r.id)) return true;
-      return bus && bus.status === 'active' && (Date.now() - (bus.lastUpdated ?? 0)) / 1000 < settings.staleAfterSeconds;
-    });
-  } else if (filter === 'Scheduled Buses') {
-    visibleRoutes = tripRoutes.filter((r) => {
-      const bus = buses[r.busId] || (demoMode ? demoBuses[r.busId] : null);
-      const isLive = (demoMode && demoRouteIds.includes(r.id)) ||
-        (bus && bus.status === 'active' && (Date.now() - (bus.lastUpdated ?? 0)) / 1000 < settings.staleAfterSeconds);
-      return !isLive;
-    });
-  }
+  const visibleRows = allRows.filter(({ route, status }) => {
+    if (!isOnTrip(route)) return false;
+    if (filter === 'Active Buses') return LIVE_STATUSES.includes(status);
+    if (filter === 'Scheduled Buses') return status === 'Scheduled';
+    return true;
+  });
 
   return (
     <Shell>
       {!isFirebaseConfigured && <ErrorBanner type="demo" />}
+      <ErrorBanner type="listener" error={routesError ?? busesError} />
       <main className="page home-page">
         <section className="hero-intro">
           <div>
@@ -67,7 +79,9 @@ export function Home() {
             <p className="eyebrow">Smart Public Transport Tracking</p>
             <h1>Plan your ride<br /><span>with confidence.</span></h1>
           </div>
-          <div className="live-badge"><span className="pulse-dot" /> Live network</div>
+          <div className={`live-badge ${anyLive ? '' : 'offline'}`}>
+            <span className={`pulse-dot ${anyLive ? '' : 'waiting'}`} /> {anyLive ? 'Live network' : 'No live buses'}
+          </div>
         </section>
 
         <section className="search-card">
@@ -75,7 +89,7 @@ export function Home() {
             <MapPin size={18} />
             <label>Boarding at
               <select value={boarding} onChange={(e) => setBoarding(e.target.value)}>
-                {allStops.map((stop) => <option key={stop}>{stop}</option>)}
+                {stopNames.map((stop) => <option key={stop}>{stop}</option>)}
               </select>
             </label>
             <span className="field-chevron">⌄</span>
@@ -85,7 +99,7 @@ export function Home() {
             <Navigation size={18} />
             <label>Going to
               <select value={destination} onChange={(e) => setDestination(e.target.value)}>
-                {allStops.map((stop) => <option key={stop}>{stop}</option>)}
+                {stopNames.map((stop) => <option key={stop}>{stop}</option>)}
               </select>
             </label>
             <button className="swap-btn" onClick={swap} aria-label="Swap stops">
@@ -103,7 +117,7 @@ export function Home() {
         </div>
 
         <div className="filter-row">
-          {['All Routes', 'Active Buses', 'Scheduled Buses'].map((item) => (
+          {FILTERS.map((item) => (
             <button key={item} className={`filter-chip ${filter === item ? 'active' : ''}`} onClick={() => setFilter(item)}>
               {item}
             </button>
@@ -111,19 +125,18 @@ export function Home() {
         </div>
 
         <div className="route-list">
-          {visibleRoutes.map((route) => (
+          {visibleRows.map(({ route, status, bus }) => (
             <RouteCard
               key={route.id}
               route={route}
-              busData={buses[route.busId] || (demoMode ? demoBuses[route.busId] : null)}
+              status={status}
+              busData={bus}
               boardingStop={route.stops.find((stop) => stop.name === boarding)}
-              demoMode={demoMode}
-              demoRouteIds={demoRouteIds}
               onClick={() => navigate(`/tracking/${route.busId}`)}
             />
           ))}
-          {visibleRoutes.length === 0 && (
-            <div className="empty-state">No routes found for this trip</div>
+          {visibleRows.length === 0 && (
+            <div className="empty-state">{EMPTY_MESSAGES[filter] ?? 'No routes found for this trip'}</div>
           )}
         </div>
       </main>

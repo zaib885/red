@@ -28,7 +28,16 @@ npm install
 
 ## Environment
 
-Copy `.env.example` to `.env` or use the included `.env`, then replace each `YOUR_...` Firebase placeholder with the Web App configuration from Firebase Console. The file is ignored by git. With placeholder values, RoutVia automatically uses Demo Mode.
+Copy `.env.example` to `.env` and replace each `YOUR_...` Firebase placeholder with the Web App configuration from Firebase Console. No `.env` file is shipped with the project. The file is ignored by git. With placeholder values, RoutVia automatically uses Demo Mode. Restart `npm run dev` after editing `.env`, because Vite only reads it at startup.
+
+Clock note: the driver's phone clock may differ from the laptop's. Driver writes use Firebase server timestamps and the passenger page uses Firebase's server time offset, so a wrong phone clock does not make a live bus look stale.
+
+## Real tracking test steps
+
+1. Open `/driver` on the driver phone over the ngrok HTTPS link, pick a route, and tap Start Trip.
+2. On the laptop, open `/tracking/BUS001` with Demo Mode OFF. The bus should appear and move on the map.
+3. Tap Stop Trip on the phone. The laptop should show "Waiting for Driver Location · Trip ended".
+4. Add `?debug=1` to any page to open the diagnostics panel.
 
 Important settings include `VITE_DEMO_MODE` (`auto`, `on`, or `off`), ETA speed and road-distance settings, stale data timeout, and GPS write interval.
 

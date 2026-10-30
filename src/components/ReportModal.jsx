@@ -1,42 +1,45 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { routes, knownBusIds } from '../data/routes';
-import { validateReport } from '../utils/validation';
+import { useRoutesContext } from '@/context/RoutesContext';
+import { knownBusIds } from '@/utils/routes';
+import { validateReport } from '@/utils/validation';
 
 export function ReportModal({ onClose, onSubmit }) {
+  const { routes } = useRoutesContext();
+  const busIds = useMemo(() => knownBusIds(routes), [routes]);
   const [form, setForm] = useState({
     itemName: '',
     type: 'Lost',
-    busId: knownBusIds[0] ?? '',
+    busId: busIds[0] ?? '',
     customBusId: '',
-    routeId: routes[0]?.id ?? 'R9',
+    routeId: routes[0]?.id ?? '',
     description: '',
     contact: '',
   });
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
-  const update = (key, value) => setForm((c) => ({ ...c, [key]: value }));
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const busId = form.busId === 'Other' ? form.customBusId.trim() : form.busId;
+    const rawBusId = form.busId === 'Other' ? form.customBusId : form.busId;
     const payload = {
       itemName: form.itemName.trim(),
       type: form.type,
-      busId,
+      busId: rawBusId.trim().toUpperCase(),
       routeId: form.routeId,
       description: form.description.trim(),
       contact: form.contact.trim(),
     };
-    const { errors: errs, isValid } = validateReport(payload);
-    setErrors(errs);
+    const { errors: found, isValid } = validateReport(payload);
+    setErrors(found);
     if (!isValid) return;
     setSubmitting(true);
     try {
       await onSubmit(payload);
     } catch {
-      // keep form data on error
+      // Keep the form data so the user can retry.
     } finally {
       setSubmitting(false);
     }
@@ -66,11 +69,11 @@ export function ReportModal({ onClose, onSubmit }) {
             </label>
             <label>Bus ID
               <select value={form.busId} onChange={(e) => update('busId', e.target.value)}>
-                {knownBusIds.map((id) => <option key={id}>{id}</option>)}
+                {busIds.map((id) => <option key={id}>{id}</option>)}
                 <option value="Other">Other</option>
               </select>
               {form.busId === 'Other' && (
-                <input value={form.customBusId} onChange={(e) => update('customBusId', e.target.value)} placeholder="Enter bus ID" style={{ marginTop: '8px' }} />
+                <input value={form.customBusId} onChange={(e) => update('customBusId', e.target.value)} placeholder="e.g. BUS012" style={{ marginTop: '8px' }} />
               )}
               {errors.busId && <small className="form-error">{errors.busId}</small>}
             </label>

@@ -1,9 +1,11 @@
 import { Zap } from 'lucide-react';
+import { useNow } from '@/hooks/useNow';
+import { formatSecondsAgo } from '@/utils/time';
+import { BUS_STATE_LABELS } from '@/utils/busStatus';
 
-export function EtaPanel({ eta, selectedStop, nextStop, route, busData, demoMode, lastUpdated }) {
-  const lastUpdatedLabel = lastUpdated
-    ? `${Math.max(0, Math.floor((Date.now() - lastUpdated) / 1000))}s ago`
-    : '—';
+export function EtaPanel({ eta, selectedStop, nextStopName, route, busData, busState, demoMode, lastUpdated }) {
+  const now = useNow();
+  const speedLabel = busData?.speed != null ? `${busData.speed} km/h${demoMode ? ' (simulated)' : ''}` : '—';
 
   return (
     <section className="trip-panel">
@@ -42,15 +44,15 @@ export function EtaPanel({ eta, selectedStop, nextStop, route, busData, demoMode
         </div>
         <div>
           <span>Speed</span>
-          <strong>{busData?.speed != null ? `${busData.speed} km/h` : '—'}</strong>
+          <strong>{speedLabel}</strong>
         </div>
         <div>
           <span>Status</span>
-          <strong>{busData?.status ?? (demoMode ? 'Active' : 'Waiting')}</strong>
+          <strong>{BUS_STATE_LABELS[busState]}</strong>
         </div>
         <div>
           <span>Updated</span>
-          <strong>{demoMode ? 'Now' : lastUpdatedLabel}</strong>
+          <strong>{demoMode ? 'Simulated' : formatSecondsAgo(lastUpdated, now)}</strong>
         </div>
       </div>
       <div className="approx-note">
@@ -59,12 +61,12 @@ export function EtaPanel({ eta, selectedStop, nextStop, route, busData, demoMode
           ? 'Based on average bus speed · approximate, straight-line based.'
           : 'Estimated arrival — approximate, based on straight-line distance.'}
       </div>
-      {nextStop && (
+      {nextStopName && (
         <div className="next-stop">
           <div>
             <span className="live-dot" /> Next stop
           </div>
-          <strong>{nextStop}</strong>
+          <strong>{nextStopName}</strong>
         </div>
       )}
     </section>

@@ -1,203 +1,236 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { firebaseReady, publishBusLocation, setBusInactive, armOnDisconnect, cancelOnDisconnect, describeFirebaseError } from '../firebase';
-import { settings } from '../config';
+import {
+  armOnDisconnect,
+  cancelOnDisconnect,
+  describeFirebaseError,
+  isFirebaseConfigured,
+  publishBusLocation,
+  setBusInactive,
+} from '@/firebase';
+import { getServerNow } from '@/firebase/serverClock';
+import { settings, MIN_MOVE_METERS } from '@/data/settings';
+import { distanceMeters } from '@/utils/geo';
+import { useOnlineStatus } from './useOnlineStatus';
+
+const GPS_ERROR_MESSAGES = {
+  1: 'Location permission denied. Enable location for this site in browser settings.',
+  2: 'GPS signal unavailable.',
+  3: 'Location request timed out. Retrying…',
+};
 
 export function useGeolocationTrip() {
-  const [selectedRoute, setSelectedRoute] = useState(null);
+  const online = useOnlineStatus();
   const [tracking, setTracking] = useState(false);
-  const [gpsStatus, setGpsStatus] = useState('Waiting for permission');
-  const [firebaseStatus, setFirebaseStatus] = useState(firebaseReady ? 'Connected' : 'Not configured');
   const [trackingStatus, setTrackingStatus] = useState('Not started');
-  const [lastLocation, setLastLocation] = useState(null);
+  const [gpsStatus, setGpsStatus] = useState('Waiting to start');
+  const [gpsError, setGpsError] = useState(false);
+  const [firebaseStatus, setFirebaseStatus] = useState(isFirebaseConfigured ? 'Not connected yet' : 'Not configured');
+  const [lastFix, setLastFix] = useState(null);
+  const [lastSentAt, setLastSentAt] = useState(null);
   const [lastWriteResult, setLastWriteResult] = useState(null);
-  const [lastWriteTime, setLastWriteTime] = useState(null);
-  const [online, setOnline] = useState(navigator.onLine);
-  const [authError, setAuthError] = useState(null);
-  const [wakeLock, setWakeLock] = useState(null);
-  const [wakeLockSupported, setWakeLockSupported] = useState('wakeLock' in navigator);
 
-  const watchIdRef = useRef(null);
-  const lastWriteTimeRef = useRef(0);
-  const lastWrittenLocationRef = useRef(null);
+  const activeRef = useRef(false);
   const routeRef = useRef(null);
+  const watchIdRef = useRef(null);
+  const wakeLockRef = useRef(null);
+  const lastSentRef = useRef(null);
+  const lastFixRef = useRef(null);
+  const pendingRef = useRef(null);
 
-  const updateRoute = useCallback((route) => {
-    if (!tracking) {
-      setSelectedRoute(route);
-      routeRef.current = route;
+  const sendLocation = useCallback(async (location) => {
+    setFirebaseStatus('Sending');
+    try {
+      const written = await publishBusLocation(location);
+      if (!written) {
+        setFirebaseStatus('Not configured');
+        setLastWriteResult('Not sent: Firebase is not configured');
+        return;
+      }
+      const sentAt = getServerNow();
+      lastSentRef.current = { time: sentAt, latitude: location.latitude, longitude: location.longitude };
+      setLastSentAt(sentAt);
+      setLastWriteResult('Success');
+      setFirebaseStatus('Connected');
+    } catch (error) {
+      setFirebaseStatus('Error');
+      setLastWriteResult(`Error: ${describeFirebaseError(error)}`);
     }
-  }, [tracking]);
-
-  useEffect(() => {
-    const handleOnline = () => setOnline(true);
-    const handleOffline = () => setOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
   }, []);
 
-  const acquireWakeLock = async () => {
-    if (!('wakeLock' in navigator)) return;
+  const handleFix = useCallback((position) => {
+    const route = routeRef.current;
+    if (!route) return;
+
+    const { latitude, longitude, speed, accuracy } = position.coords;
+    const location = {
+      busId: route.busId,
+      routeId: route.id,
+      latitude,
+      longitude,
+      speed: speed != null && speed > 0 ? Math.round(speed * 3.6) : 0,
+      accuracy: Math.round(accuracy ?? 0),
+      status: 'active',
+    };
+    lastFixRef.current = location;
+    setLastFix(location);
+    setGpsError(false);
+    setGpsStatus(location.accuracy > 50 ? 'Weak GPS accuracy' : 'Good GPS lock');
+
+    const last = lastSentRef.current;
+    const now = getServerNow();
+    const moved = last ? distanceMeters([last.latitude, last.longitude], [latitude, longitude]) : Infinity;
+    const due = !last || now - last.time >= settings.gpsWriteIntervalSeconds * 1000 || moved > MIN_MOVE_METERS;
+    if (!due) return;
+
+    if (!navigator.onLine) {
+      pendingRef.current = location;
+      setFirebaseStatus('Offline');
+      return;
+    }
+    sendLocation(location);
+  }, [sendLocation]);
+
+  const handleGeoError = useCallback((error) => {
+    if (error.code === 3) {
+      setGpsStatus(GPS_ERROR_MESSAGES[3]);
+      return;
+    }
+    setGpsError(true);
+    setGpsStatus(GPS_ERROR_MESSAGES[error.code] ?? 'GPS unavailable.');
+  }, []);
+
+  const beginWatch = useCallback(() => {
+    if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
+    watchIdRef.current = navigator.geolocation.watchPosition(handleFix, handleGeoError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0,
+    });
+  }, [handleFix, handleGeoError]);
+
+  const acquireWakeLock = useCallback(async () => {
+    if (!('wakeLock' in navigator) || wakeLockRef.current) return;
     try {
       const lock = await navigator.wakeLock.request('screen');
-      setWakeLock(lock);
-    } catch { /* graceful fallback */ }
-  };
-
-  const releaseWakeLock = async () => {
-    if (wakeLock) {
-      try { await wakeLock.release(); } catch { /* noop */ }
-      setWakeLock(null);
+      if (!activeRef.current) {
+        lock.release().catch(() => {});
+        return;
+      }
+      wakeLockRef.current = lock;
+      lock.addEventListener('release', () => {
+        if (wakeLockRef.current === lock) wakeLockRef.current = null;
+      });
+    } catch {
+      wakeLockRef.current = null;
     }
-  };
+  }, []);
 
-  const startTrip = useCallback(async () => {
-    if (tracking) return;
-    if (!routeRef.current) return;
+  const releaseWakeLock = useCallback(() => {
+    const lock = wakeLockRef.current;
+    wakeLockRef.current = null;
+    lock?.release().catch(() => {});
+  }, []);
+
+  const startTrip = useCallback((route) => {
+    if (activeRef.current) return;
+    activeRef.current = true;
+    routeRef.current = route;
+    setTracking(true);
+    setTrackingStatus('Tracking');
+    setGpsError(false);
+    armOnDisconnect(route.busId, route.id);
+    acquireWakeLock();
 
     if (!window.isSecureContext) {
-      setGpsStatus('GPS needs HTTPS. Open this page through your ngrok https link.');
+      setGpsError(true);
+      setGpsStatus('GPS needs HTTPS. Open this page through your secure (https) link.');
       return;
     }
-
     if (!navigator.geolocation) {
-      setGpsStatus('GPS is not available on this device');
+      setGpsError(true);
+      setGpsStatus('GPS is not available on this device.');
       return;
     }
-
     setGpsStatus('Acquiring GPS signal…');
-    setTrackingStatus('Tracking');
+    beginWatch();
+  }, [acquireWakeLock, beginWatch]);
 
-    await acquireWakeLock();
+  const retryGps = useCallback(() => {
+    if (!activeRef.current || !navigator.geolocation) return;
+    setGpsError(false);
+    setGpsStatus('Acquiring GPS signal…');
+    beginWatch();
+  }, [beginWatch]);
 
-    const route = routeRef.current;
-    armOnDisconnect(route.busId, route.id);
-
-    const id = navigator.geolocation.watchPosition(
-      async (pos) => {
-        const speedMs = pos.coords.speed ?? 0;
-        const speedKmh = Math.max(0, Math.round(speedMs * 3.6));
-        const accuracy = Math.max(0, Math.round(pos.coords.accuracy ?? 0));
-        const next = {
-          busId: route.busId,
-          routeId: route.id,
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          speed: speedKmh,
-          accuracy,
-          status: 'active',
-          lastUpdated: Date.now(),
-        };
-
-        setLastLocation(next);
-        setGpsStatus(accuracy > 50 ? 'Weak accuracy' : 'Good GPS lock');
-        setTracking(true);
-
-        const now = Date.now();
-        const prev = lastWrittenLocationRef.current;
-        const movedDist = prev
-          ? Math.hypot(pos.coords.latitude - prev.latitude, pos.coords.longitude - prev.longitude) * 111000
-          : Infinity;
-
-        if (now - lastWriteTimeRef.current >= settings.gpsWriteIntervalSeconds * 1000 || movedDist > 10) {
-          if (!navigator.onLine) {
-            setFirebaseStatus('Offline');
-            return;
-          }
-
-          try {
-            setFirebaseStatus('Sending');
-            await publishBusLocation(next);
-            lastWriteTimeRef.current = now;
-            lastWrittenLocationRef.current = next;
-            setLastWriteResult('Success');
-            setLastWriteTime(now);
-            setFirebaseStatus('Connected');
-          } catch (err) {
-            setLastWriteResult(`Error: ${describeFirebaseError(err)}`);
-            setFirebaseStatus('Error');
-            if (err?.code?.includes('admin-restricted-operation') || err?.code?.includes('operation-not-allowed')) {
-              setAuthError(describeFirebaseError(err));
-            }
-          }
-        }
-      },
-      (error) => {
-        if (error.code === 1) {
-          setGpsStatus('Location permission denied. Enable location access in your browser settings.');
-        } else if (error.code === 2) {
-          setGpsStatus('Position unavailable. Retrying…');
-        } else if (error.code === 3) {
-          setGpsStatus('GPS timeout. Still watching…');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
-
-    watchIdRef.current = id;
-  }, [tracking]);
-
-  const stopTrip = useCallback(async () => {
+  const stopTrip = useCallback(() => {
     if (watchIdRef.current != null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    activeRef.current = false;
+    releaseWakeLock();
+    pendingRef.current = null;
 
     setTracking(false);
     setTrackingStatus('Trip Stopped');
     setGpsStatus('Stopped');
-    await releaseWakeLock();
+    setGpsError(false);
 
     const route = routeRef.current;
-    if (route) {
-      cancelOnDisconnect(route.busId);
-      try {
-        if (lastLocation) {
-          await publishBusLocation({ ...lastLocation, status: 'inactive', lastUpdated: Date.now() });
-        } else {
-          await setBusInactive(route.busId, route.id);
-        }
-        setFirebaseStatus('Connected');
-      } catch (err) {
-        setFirebaseStatus('Error');
-        setLastWriteResult(`Error: ${describeFirebaseError(err)}`);
-      }
-    }
-  }, [lastLocation]);
+    routeRef.current = null;
+    if (!route) return;
 
-  // pagehide best-effort
+    cancelOnDisconnect(route.busId);
+    const last = lastFixRef.current;
+    lastFixRef.current = null;
+    const write = last
+      ? publishBusLocation({ ...last, status: 'inactive' })
+      : setBusInactive(route.busId, route.id);
+    write
+      .then((written) => {
+        if (!written) return;
+        setLastWriteResult('Trip ended: bus set to inactive');
+        setFirebaseStatus('Connected');
+      })
+      .catch((error) => {
+        setFirebaseStatus('Error');
+        setLastWriteResult(`Error: ${describeFirebaseError(error)}`);
+      });
+  }, [releaseWakeLock]);
+
   useEffect(() => {
-    const handler = () => {
-      const route = routeRef.current;
-      if (route && tracking) {
-        if (lastLocation) {
-          publishBusLocation({ ...lastLocation, status: 'inactive', lastUpdated: Date.now() }).catch(() => {});
-        } else {
-          setBusInactive(route.busId, route.id).catch(() => {});
-        }
-      }
+    if (online && activeRef.current && pendingRef.current) {
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      sendLocation(pending);
+    }
+  }, [online, sendLocation]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && activeRef.current) acquireWakeLock();
     };
-    window.addEventListener('pagehide', handler);
-    return () => window.removeEventListener('pagehide', handler);
-  }, [tracking, lastLocation]);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [acquireWakeLock]);
+
+  useEffect(() => () => {
+    if (activeRef.current) stopTrip();
+  }, [stopTrip]);
 
   return {
-    selectedRoute,
-    updateRoute,
     tracking,
-    gpsStatus,
-    firebaseStatus,
     trackingStatus,
-    lastLocation,
+    gpsStatus,
+    gpsError,
+    firebaseStatus,
+    lastFix,
+    lastSentAt,
     lastWriteResult,
-    lastWriteTime,
     online,
-    authError,
-    wakeLockSupported,
+    wakeLockSupported: 'wakeLock' in navigator,
     startTrip,
     stopTrip,
+    retryGps,
   };
 }

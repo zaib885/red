@@ -20,7 +20,9 @@ export function validateReport(form) {
     errors.contact = 'Enter a valid Pakistani phone number or email';
   }
 
-  if (!form.busId || !form.busId.trim()) errors.busId = 'Bus ID is required';
+  const busId = form.busId?.trim() ?? '';
+  if (!busId) errors.busId = 'Bus ID is required';
+  else if (!/^BUS\d+$/i.test(busId)) errors.busId = 'Bus ID must look like BUS012';
 
   return { errors, isValid: Object.keys(errors).length === 0 };
 }

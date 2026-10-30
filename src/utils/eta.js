@@ -1,5 +1,5 @@
 import { haversineDistance } from './geo';
-import { settings } from '../config';
+import { settings } from '@/data/settings';
 
 export function estimateEta({ busPosition, stopPosition, gpsSpeedKmh, routeMultiplier }) {
   const distance = haversineDistance(busPosition, stopPosition);
